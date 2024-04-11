@@ -1,178 +1,184 @@
 import os 
-import time
 import pandas as pd
 from pathlib import Path
 from loguru import logger
-from typing import List, Union
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
-from util.constants import *
+from typing import List
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
-def load_dataset(cfg, model_path: str, top_docs_count: int, run_mode: str, stage: str) -> pd.DataFrame:
-
-    print(cfg.stage, cfg.run_mode)
-    start_time = time.time()
-
-    if cfg.stage == 'TRAIN' and cfg.run_mode == "RUN":
-        input_file_path = TRAIN_SET_PATH
-        df_path = TRAIN_DF_PATH
-        queries_path = QUERIES_TRAIN_FILE_PATH
-
-    elif cfg.stage == 'TRAIN' and cfg.run_mode == "DEBUG":
-        input_file_path = DEBUG_TRAIN_SET_PATH
-        df_path = DEBUG_TRAIN_DF_PATH
-        queries_path = QUERIES_TRAIN_FILE_PATH
-
-    elif cfg.stage == 'EVAL' and cfg.run_mode == "RUN":
-        input_file_path = TEST_SET_PATH
-        df_path = TEST_DF_PATH
-        queries_path = QUERIES_TEST_FILE_PATH
-
-    else:
-        input_file_path = DEBUG_TEST_SET_PATH
-        df_path = DEBUG_TEST_DF_PATH
-        queries_path = QUERIES_TEST_FILE_PATH
+from .helper_functions import set_manual_seed
+set_manual_seed()
 
 
-    print(f"SET PATH: {input_file_path}")
-    if os.path.isfile(df_path):
-        df = pd.read_csv(df_path)
-        if 'Unnamed: 0' in df.columns:
-            df = df.drop('Unnamed: 0', axis = 1 )
+device = 'cuda:0'
 
-        df['doc_id'] = df['doc_id'].astype(str)
-        logger.info(f"Loaded from presaved dataframe in {df_path} in  {time.time() - start_time} seconds")
-        print(df.info())
-        print(df.head(2))
-        return df
+def load_queries(queries_path):
 
-    corpus = {}
-    with open(CORPUS_FILE_PATH, 'r', encoding='utf8') as f:
-        for line in f:
-            pid, passage = line.strip().split("\t")
-            corpus[pid] = passage.strip()
-
-    print('Loading queries...')
     queries = {}
     with open(queries_path, 'r', encoding='utf8') as f:
         for line in f:
             qid, query = line.strip().split("\t")
             queries[qid] = query.strip()
-
-    model = SentenceTransformer(model_path, device='cuda:3')
-    print(f'{model_path} model loaded.')
-
-    dic = {"qid": [], "doc_id": [], "relevance": [], "bias": []}
-    # dic = {"qid": [], "doc_id": [], "relevance": []}
+    return queries
 
 
-    for i in range(1, 769):
-        dic[i] = []
+def load_corpus(corpus_file_path):
 
-    with open(input_file_path, 'r', encoding='utf8') as f:
-        qid_set = set()
-        for line in tqdm(f, total=50289125):
-            data = line.strip().split(" ")
-            qid = data[0]
+    corpus = {}
+    with open(corpus_file_path, 'r', encoding='utf8') as f:
+        for line in f:
+            pid, passage = line.strip().split("\t")
+            corpus[pid] = passage.strip()
 
-            if qid not in qid_set:
-                qid_set.add(qid)
-                row_counter = 1
+    return corpus
 
-            if row_counter > top_docs_count:
-                continue
-            else:
-                #121352 Q0 5561504 2 1.0000000 gold_sbert 0.0
-                doc_id, relevance = data[2], float(data[4])
-                bias = float(data[6])
+def get_vector(row, queries, corpus, cross_encoder, model):
 
-                dic["qid"].append(int(qid))
-                dic["doc_id"].append(doc_id)
-                dic["relevance"].append(relevance)
-                dic["bias"].append(bias)
+    qid, doc_id = row[0], row[1] #str, str
 
-                vector = model.encode(f'{queries[qid]}[SEP]{corpus[doc_id]}')
-                # print(len(vector))
-                for i in range(1, 769):
-                    dic[i].append(vector[i - 1])
+    text = f'{queries[qid]}[SEP]{corpus[doc_id]}'
+    tokens = cross_encoder.tokenizer(text, return_tensors="pt").to(device)
+    vector = model(**tokens).pooler_output.detach().cpu().numpy().tolist()[0]
+    return vector
 
-                row_counter += 1
 
-    df = pd.DataFrame(data=dic).sort_values(["qid", "relevance"], ascending=False)
-    df.to_csv(df_path)
+def encode_date(queries, corpus, df, base_language_model_path):
 
-    logger.info(f"Loaded data from run file and saved to {df_path} in {time.time() - start_time} seconds")
+    cross_encoder = CrossEncoder(base_language_model_path, device=device)
+    model = cross_encoder.model.bert.to(device)
+
+    enc = df.apply(get_vector, args=(queries, corpus, cross_encoder, model), axis=1, result_type='expand')
+    
+    df = pd.concat([df, enc], axis=1)
+
     return df
 
-def get_model_inputs(state, action, dataset) -> np.ndarray:
-    """
-    Get model inputs for the given state and action.
-    
-    Args:
-    - state: State information.
-    - action: Action information.
-    - dataset (pd.DataFrame): Dataset for reference.
-    
-    Returns:
-    - np.ndarray: Model inputs.
-    """
-    return np.array([state.t] + get_features(state.qid, action, dataset))
+def load_dataset(cfg, stage= None) -> pd.DataFrame:
 
-def get_multiple_model_inputs(state, doc_list, dataset) -> np.ndarray:
-    """
-    Get multiple model inputs for the given state, list of docs, and dataset.
-    
-    Args:
-    - state: State information.
-    - doc_list (List[Union[str, int]]): List of documents.
-    - dataset (pd.DataFrame): Dataset for reference.
-    
-    Returns:
-    - np.ndarray: Multiple model inputs.
-    """
-    return np.insert(get_query_features(state.qid, doc_list, dataset), 0, state.t, axis=1)
+    if not stage:
+        stage = cfg.stage
+    if stage == 'TRAIN':
+        input_file_path, df_path, queries_path = cfg.train_set_path, cfg.train_df_path, cfg.train_queries_path
+    elif stage == 'VALID':
+        input_file_path, df_path, queries_path = cfg.valid_set_path, cfg.valid_df_path, cfg.valid_queries_path
+    elif stage == "EVAL1":
+        input_file_path, df_path, queries_path = cfg.neutral_test_set_path, cfg.neutral_test_df_path, cfg.test_queries_path
+    elif stage == "EVAL2":
+        input_file_path, df_path, queries_path = cfg.social_test_set_path, cfg.social_test_df_path, cfg.test_queries_path
+    else:
+        input_file_path, df_path, queries_path = cfg.dev_test_set_path, cfg.dev_test_df_path, cfg.test_queries_path
+
+
+
+    if not os.path.exists(df_path):
+
+        df = pd.read_csv(input_file_path, names = list(cfg.run_params.columns))
+
+        df["qid"] = df["qid"].astype(str)
+        df["doc_id"] = df["doc_id"].astype(str)
+
+        queries = load_queries(queries_path)
+        corpus = load_corpus(cfg.corpus_file_path)
+
+        common_qid = set(queries.keys()).intersection(set(df["qid"].values))
+        # print(f"common_qid:{common_qid}")
+
+        # base_language_model_path = f"/home/sajadeb/LLaMA_Debiasing/CrossEncoder/output/cross-encoder_bert-base-uncased/"
+        df = encode_date(queries, corpus, df, cfg.cross_encoder_path)
+
+        df.columns = ['qid', 'doc_id', 'relevance'] + [str(i) for i in range(1, 769)]
+
+        df.to_csv(df_path)
+
+    else:
+
+        df = pd.read_csv(df_path)  
+        df["qid"] = df["qid"].astype(str)
+        df["doc_id"] = df["doc_id"].astype(str)
+
+        if 'bias' in df.columns and df["bias"].dtype == "object":
+            df['bias'] = df['bias'].apply(eval)
+            df['bias'] = df['bias'].apply(lambda x:x[0])
+
+
+        columns = list(cfg.run_params.columns) + [str(i) for i in range(1, cfg.run_params.vector_size+1)]
+        df = df[columns]
+        df = df.sort_values(["qid", "relevance"], ascending=False)
+
+        logger.info(f"{stage}\n{df.head(5)}")
+
+    return df
+
 
 def get_features(qid, doc_id, dataset) -> List[float]:
-    """
-    Get features for the given query id and document id.
-    
-    Args:
-    - qid (Union[str, int]): Query ID.
-    - doc_id (Union[str, int]): Document ID.
-    - dataset (pd.DataFrame): Dataset for reference.
-    
-    Returns:
-    - List[float]: Features for the given query and document.
-    """
-    qid, doc_id = int(qid), str(doc_id)
+
+    qid, doc_id = str(qid), str(doc_id)
+
     df = dataset[(dataset["doc_id"].str.contains(doc_id)) & (dataset["qid"] == qid)]
     assert len(df) != 0, "Fix the dataset"
 
-    df_copy = df.copy()
-    df_copy.drop(["qid", "doc_id", "relevance", "bias"], axis=1, inplace=True)
-    df = df_copy
-    return df.values.tolist()[0]
+    if 120 < len(df.columns) < 200:
+        vector_size = 128
+    elif 200 < len(df.columns) < 300:
+        vector_size = 256
+    else:
+        vector_size = 768
+
+    relevant_columns = [f"{i}" for i in range(1, vector_size+1)]
+
+    # relevant_columns = relevant_columns + ["relevance", "bias", "nfair"]
+    relevant_columns = relevant_columns + ["relevance"]
+
+    return df[relevant_columns].values.tolist()[0]
 
 def get_query_features(qid, doc_list, dataset) -> np.ndarray:
     """
     Get query features for the given query ID, list of docs, and dataset.
-    
-    Args:
-    - qid (Union[str, int]): Query ID.
-    - doc_list (List[Union[str, int]]): List of documents.
-    - dataset (pd.DataFrame): Dataset for reference.
-    
-    Returns:
-    - np.ndarray: Query features.
     """
     doc_set = set(doc_list)
-    qid = int(qid)
+    qid = str(qid)
     if len(doc_list) > 0:
         df = dataset[dataset["qid"] == qid]
         df = df[df["doc_id"].isin(doc_set)]
     else:
         df = dataset[dataset["qid"] == qid]
     assert len(df) != 0
-    df.drop(["qid", "doc_id", "relevance", "bias"], axis=1, inplace=True)
+    
+    if len(df.columns) <= 200:
+        vector_size = 128
+    elif 200 < len(df.columns) <= 300:
+        vector_size = 256
+    else:
+        vector_size = 768
+
+    # valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance", "bias", "nfair"]
+    valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance"]
+    df = df[valid_columns]
+    # print(f"query featues: {df.columns}")
     return df.values
+
+
+def get_model_inputs(state, action, dataset, verbose=True) -> np.ndarray:
+
+    temp = [state.t] + get_features(state.qid, action, dataset)
+    temp = [float(x) for x in temp]
+
+    temp_array = np.array(temp)
+    
+    min_val = temp_array.min()
+    max_val = temp_array.max()
+    if max_val - min_val > 0:  # Avoid division by zero
+        normalized_temp = (temp_array - min_val) / (max_val - min_val)
+    else:
+        normalized_temp = temp_array
+
+    return np.array(normalized_temp)
+
+def get_multiple_model_inputs(state, doc_list, dataset) -> np.ndarray:
+
+    return np.insert(get_query_features(state.qid, doc_list, dataset), 0, state.t, axis=1)
+
+
+
+
+

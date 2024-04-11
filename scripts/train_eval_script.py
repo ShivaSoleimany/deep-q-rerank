@@ -1,7 +1,7 @@
 import time
 import argparse
 from hydra import compose, initialize
-from util import *
+# from util import *
 from scripts import *
 
 def main():
@@ -27,7 +27,7 @@ def main():
 
     train_start_time = time.time()
 
-    train_model(cfg.train_config)
+    train_model(cfg)
 
     train_end_time = time.time()
     #---------------

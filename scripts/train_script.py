@@ -1,67 +1,78 @@
-import os
-import random
-import torch
 import argparse
-from hydra import compose, initialize
+import time
+import random
+import os
+from tqdm import tqdm
 from loguru import logger
-from tqdm import tqdm 
+from hydra import compose, initialize
+import torch
+from torch.utils.tensorboard import SummaryWriter
 
-from util import *
 from model.dqn import DQNAgent
 from model.mdp import BasicBuffer
+from util.preprocess import *
+from util.helper_functions import set_manual_seed
+from util.plot_results import save_and_plot_results
 
-def train_model(cfg):
+set_manual_seed()
 
-    logger.info(f" training model in {cfg.run_mode} mode")
-    random.seed(cfg.run_params.seed)
+def train_model(cfg, train_set=None, valid_set=None):
 
-    train_set = load_dataset(cfg, cfg.bert_model_path, cfg.run_params.top_docs_count, cfg.run_mode, "TRAIN")
+    logger.info(f"Training in {cfg.run_mode} mode")
+
+    valid_cfg = cfg.valid_config
+    train_cfg = cfg.train_config
+
+    writer = SummaryWriter()
+
+    writer = SummaryWriter(log_dir=f'{train_cfg.output_folder}/tensorboard')
+
+    train_set = train_set if train_set is not None and not train_set.empty else load_dataset(train_cfg)
+
+    train_buffer = BasicBuffer(train_cfg.run_params.buffer_qid * 15)
+    train_buffer.push_batch(train_cfg.qid_train_list_path, train_set, train_cfg.reward_params,  train_cfg.run_params.buffer_qid)
+
+    valid_set = valid_set if valid_set is not None and not valid_set.empty else load_dataset(valid_cfg)
+    val_buffer = BasicBuffer(valid_cfg.run_params.buffer_qid*15)
+    val_buffer.push_batch(valid_cfg.qid_valid_list_path, valid_set, valid_cfg.reward_params, valid_cfg.run_params.buffer_qid)
+
+    agent = DQNAgent(dataset=train_set, buffer=train_buffer, config_dict = train_cfg.model_config_dict)
     
-    train_buffer = BasicBuffer(50000)
-    train_buffer.push_batch(train_set, cfg.r, cfg.b, 50)
+    best_val_performance = float('inf')
+    training_metrics = {'train_loss': [], 'train_reward': [], 'valid_loss': []}
 
-    # val_set = load_dataset(cfg.val_set_path, cfg.corpus_filepath, cfg.queries_filepath, cfg.bert_model_path, cfg.run_params.top_docs_count, cfg.train_set_df_path, cfg.run_mode )
-    # val_buffer = BasicBuffer(20000)
-    # val_buffer.push_batch(val_set, 3)
+    for epoch in tqdm(range(train_cfg.run_params.epochs)):
 
-    # agent = DQNAgent((770,), learning_rate=3e-4, buffer=train_buffer, dataset=train_set)
-    learning_rate = cfg.run_params.learning_rate
-    agent = DQNAgent((769,), learning_rate=learning_rate, buffer=train_buffer, dataset=train_set)
-
-    y, z = [], []
-    rewards = []
-    for i in tqdm(range(cfg.run_params.epochs)):
-        # print(f"epoch:{i}")
         loss, expected_Q = agent.update(1, verbose=True)
-        y.append(loss)
-        rewards.append(expected_Q)
+        training_metrics['train_loss'].append(loss)
+        training_metrics['train_reward'].append(expected_Q)
 
-        # z.append(agent.compute_loss(val_buffer.sample(1), val_set, verbose=True))
+        writer.add_scalar('Loss/train', loss, epoch)
+        writer.add_scalar('Reward/train', expected_Q, epoch)
 
-    torch.save(agent.model.state_dict(), cfg.model_path)
+        val_loss, curr_Q, expected_Q = agent.compute_loss(val_buffer.sample(1), valid_set, verbose=True)
+        training_metrics['valid_loss'].append(val_loss)
 
-    y = [float(x) for x in y]
-    # print(f"rewards:{rewards}")
-    rewards = [float(x) for x in rewards]
-    # z = [float(x) for x in z]
+        writer.add_scalar('Loss/validation', val_loss, epoch)
 
-    with open(cfg.train_output_file_path, 'w+') as f:
-        # f.write("Training Loss:\n")
-        f.write(str(y))
+        if val_loss < best_val_performance:
+            best_val_performance = val_loss
+            torch.save(agent.model.state_dict(), train_cfg.model_path)
 
-    # with open(cfg.validation_output_file_path, 'w+') as f:
-    #     f.write("Validation Loss:\n")
-    #     f.write(str(z))
-
-    plot_MA_log10(rewards, cfg.run_params.window, cfg.train_QValues_log10_plot_path, label="Q valuesin log10 MA")
-    plot_loss(rewards,  cfg.train_QValues_plot_path, label = "Q values")
-
-    plot_MA_log10(y, cfg.run_params.window, cfg.train_loss_log10_plot_path, label="train loss in log10 MA")
-    plot_loss(y,  cfg.train_loss_plot_path, label = "train loss")
-    # plot_MA_log10(z, cfg.run_params.window, cfg.validation_loss_plot_path, label="validation loss")
+        if epoch % 250 == 0:
+            model_temp_path = "/".join(train_cfg.model_path.split("/")[:-1])
+            model_temp_path = f"{model_temp_path}/model_{epoch}.pth"
+            torch.save(agent.model.state_dict(), model_temp_path)
 
 
+    for metric_name, data in training_metrics.items():
+        data = [float(x) for x in data]
+        save_and_plot_results(data, train_cfg.window, train_cfg.output_folder, metric_name)
+
+    writer.close() 
+    
 def main():
+
     parser = argparse.ArgumentParser(description="Running train_script")
     parser.add_argument("--conf", type=str, help="Path to the config file")
     args = parser.parse_args()
@@ -73,21 +84,22 @@ def main():
         logger.info(
             "Please provide the name of the config file using the --conf argument. \nExample: --conf config.yaml"
         )
+        return
 
     initialize(config_path="config")
     cfg = compose(config_name=f"{config_file}")
 
-    create_directories(
-        cfg.directories
-    )
+    create_directories(cfg.output_paths)
+
+    random.seed(cfg.constants.seed)
 
     start_time = time.time()
-    train_model(cfg.train_config)
+    train_model(cfg)
     end_time = time.time()
     train_run_time = end_time - start_time
     save_run_info(cfg.train_config, train_run_time, train_run_time)
 
+    logger.info("Finished Training Successfully.")
+
 if __name__ == "__main__":
     main()
-
-

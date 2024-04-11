@@ -2,6 +2,9 @@ import argparse
 import pandas as pd
 
 
+random.seed(0)
+np.random.seed(0)
+
 def calculate_MRR(qrel_file, run_file, k):
 
     qrel, run = {}, {}

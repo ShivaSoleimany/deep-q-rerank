@@ -1,70 +1,73 @@
-import torch
 import argparse
-import time
-from hydra import compose, initialize
-from loguru import logger 
-from tqdm import tqdm
 import os
-import ir_measures, ir_datasets
-from ir_measures import *
-import subprocess
+import time
+from loguru import logger
+from hydra import compose, initialize
+import torch
 
 from util import *
-from util.constants import *
 from model.dqn import DQN, DQNAgent
 
-def eval_model(cfg):
+set_manual_seed()
 
-    trec_output_file_path = cfg.eval_trec_output_file_path
-    ndgc_output_file_path = cfg.eval_ndgc_output_file_path
+def eval_model(eval_cfg, test_set=None):
 
-    fold_list = cfg.fold_list
-    ndcg_k_list = cfg.ndcg_k_list
+    logger.info(f"Testing in {eval_cfg.run_mode} mode")
 
-    logger.info("Loading TEST SET")
-    test_set = load_dataset(cfg, cfg.bert_model_path, cfg.run_params.top_docs_count, cfg.run_mode, "EVAL")
-    if 'Unnamed: 0' in test_set.columns:
-        test_set = test_set.drop('Unnamed: 0', axis = 1)
-    print(f"test_set columns: {test_set.columns}")
+    trec_mode = "neutral" if len(test_set) % 215 != 0 else "social"
+    trec_output_file_path = eval_cfg.eval_trec_output_file_path if trec_mode == "neutral" else eval_cfg.eval_social_trec_output_file_path
 
+    if test_set is None or test_set.empty:
+        test_set = load_dataset(eval_cfg)
 
-    start_time = time.time()
-    logger.info("Creating Agent from Saved Model")
-    model = DQN((769,), 1)
-    model.load_state_dict(torch.load(cfg.pretrained_model_path))
+    input_dim = eval_cfg.model_config_dict.input_dim
+    output_dim = eval_cfg.model_config_dict.output_dim
+    model_size = eval_cfg.model_config_dict.model_size
+    model = DQN(input_dim, output_dim, model_size)
 
-    learning_rate = cfg.run_params.learning_rate
-    agent = DQNAgent((769,), learning_rate=learning_rate, buffer=None, dataset=None, pre_trained_model=model)
-    MRR10_input = calculate_MRR(qrel_file, test_set, 10)
+    MRR10_input = calculate_MRR(eval_cfg.qrel_file, test_set, 10)
 
-    for fold in fold_list:
+    models_dir = os.path.dirname(eval_cfg.pretrained_model_path)
+    model_files = sorted(
+        [f for f in os.listdir(models_dir) if f.endswith('.pth')],
+        key=lambda x: int(x.split('_')[-1].split('.')[0]) if '_' in x else float('inf')
+    )
 
-        logger.info("Running Eval on test dataset with Fold {}".format(fold))
-        ndcg_list = eval_agent_final(agent, ndcg_k_list, test_set)
-        print(test_set.columns)
-        write_trec_results(agent, test_set, ["relevance", "bias"], trec_output_file_path )
+    MRR_list = []
+    
+    for model_file in model_files[::-1]:
+        print(f"model_file:{model_file}")
+        model_path = os.path.join(models_dir, model_file)
+        model.load_state_dict(torch.load(model_path))
+        agent = DQNAgent(dataset=None, buffer=None, config_dict = eval_cfg.model_config_dict, pre_trained_model=model)
 
-        logger.info(f"Saving TREC results to {trec_output_file_path}")
-        #MRR
-        # qrel_file = "/home/shiva_soleimany/RL/deep-q-rerank/data/qrels.dev.small.tsv"
-        
+        MRR10_output = evaluate_and_log_performance(agent, test_set, eval_cfg.qrel_file, model_file, trec_mode, MRR10_input, trec_output_file_path, eval_cfg.eval_output_file_path)
+        MRR_list.append(MRR10_output)
+        print("---------------------------------")
 
-        MRR10_output = calculate_MRR(qrel_file, trec_output_file_path, 10)
+    plot_MRR(MRR_list[::-1], f"{eval_cfg.plot_folder}/MRR_{trec_mode}.png")
 
-        bias_values = calculate_bias(trec_output_file_path)
-        formatted_bias_values = format_bias_output(bias_values) 
+def evaluate_and_log_performance(agent, test_set, qrel_file, model_file, trec_mode, MRR10_input, trec_output_file_path, eval_output_file_path):
 
-        with open(ndgc_output_file_path, "w") as f:
-            f.write("Fold {} NDCG Values: {}\n".format(fold, ndcg_k_list))
-            f.write(str(ndcg_list))
-            f.write("\n")
-            f.write(f"Fold {fold} input MRR@10 Value: {MRR10_input}\n")
-            f.write(f"Fold {fold} output MRR@10 Value: {MRR10_output}\n")
-            f.write(f"Fold {fold} output bias Value:\n{formatted_bias_values}\n")
-        logger.info(f"Saving NDCG results to {ndgc_output_file_path}")
+    trec_output_file_path = "".join(trec_output_file_path.split(".")[0])
+    current_trec_output_file_path = f"{trec_output_file_path}_{trec_mode}_{model_file}.txt"
 
-    logger.info("Finished Evaluating Model Successfully.")
-    logger.info("--- %s seconds ---" % (time.time() - start_time))
+    write_trec_results(agent, test_set, ["relevance"], current_trec_output_file_path )
+
+    MRR10_output = calculate_MRR(qrel_file, current_trec_output_file_path, 10)
+
+    bias_values = calculate_bias(current_trec_output_file_path)
+    formatted_bias_values = format_bias_output(bias_values) 
+
+    os.remove(current_trec_output_file_path)
+
+    with open(eval_output_file_path, "a+") as f:
+        f.write(f"input MRR@10 Value: {MRR10_input}\n")
+        f.write(f"{model_file} MRR@10 Value: {MRR10_output}\n")
+        f.write(f"output bias Value:\n{formatted_bias_values}\n")
+        f.write(f"=========================================================\n")
+
+    return MRR10_output
 
 def main():
 
@@ -83,16 +86,14 @@ def main():
     initialize(config_path="config")
     cfg = compose(config_name=f"{config_file}")
 
-    create_directories(
-        cfg.directories
-    )
-
     start_time = time.time()
     eval_model(cfg.eval_config)
     end_time = time.time()
 
     eval_run_time = end_time - start_time
     save_run_info(cfg.train_config, 0, eval_run_time)
+
+    logger.info("Finished Evaluating Model Successfully in {eval_run_time} seconds.")
 
 if __name__ == "__main__":
     main()

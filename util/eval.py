@@ -4,8 +4,12 @@ import pandas as pd
 import random
 from sklearn.utils import shuffle
 
-from model.mdp import *
+from model.mdp import compute_reward, State
 
+from util.preprocess import *
+from util.helper_functions import set_manual_seed
+
+set_manual_seed()
 
 
 def calculate_MRR(qrel_file, run_file, k):
@@ -116,29 +120,30 @@ def evaluate_ranking_list(r, qid, k, dataset):
     Takes in a ranked list of doc id's
     Returns ndcg @k of ranking
     """
-    relevance_list = get_feature_for_docs(r, qid, dataset, "relevance")
+    relevance_list = get_feature_for_docs(r, qid, dataset, "rank")
     return ndcg_at_k(relevance_list, k)
 
-def reward_from_query(agent, qid, df):
-    """
-    Run agent to rank a whole (single) query
-    agent: DQN agent
-    qid: string query id4
-    """
-    filtered_df = df.loc[df["qid"] == int(qid)].reset_index()
-    remaining = list(filtered_df["doc_id"])
-    state = State(0, qid, remaining)
-    total_reward, t= 0, 0
-    while not state.terminal:
-        next_action = agent.get_action(state)
-        t += 1
-        remaining.remove(next_action)
-        state = State(t, qid, remaining)
+# def reward_from_query(agent, qid, df):
+#     """
+#     Run agent to rank a whole (single) query
+#     agent: DQN agent
+#     qid: string query id4
+#     """
+#     filtered_df = df.loc[df["qid"] == int(qid)].reset_index()
+#     remaining = list(filtered_df["doc_id"])
+#     state = State(0, qid, remaining)
+#     total_reward, t= 0, 0
+#     while not state.terminal:
+#         next_action = agent.get_action(state)
+#         t += 1
+#         remaining.remove(next_action)
+#         state = State(t, qid, remaining)
 
-        reward = compute_reward(t, get_feature(qid, next_action, letor, "relevance"), get_feature(qid, next_action, letor, "bias"))
+#         reward = compute_reward(t, get_feature(qid, next_action, letor, "rank"), get_feature(qid, next_action, letor, "bias"))
         
-        total_reward += reward
-    return total_reward
+#         total_reward += reward
+#     return total_reward
+
 
 def get_agent_ranking_list(agent, qid, df):
     """
@@ -146,20 +151,30 @@ def get_agent_ranking_list(agent, qid, df):
     agent: DQN agent
     qid: string query id4
     """
-    filtered_df = df.loc[df["qid"] == int(qid)].reset_index()
+    filtered_df = df.loc[df["qid"] == str(qid)].reset_index()
     remaining = list(filtered_df["doc_id"])
     random.shuffle(remaining)
     state = State(0, qid, remaining)
     ranking = []
     t = 0
+    # print(f"qid:{qid}")
     while len(remaining) > 0:
         
         next_action = agent.get_action(state, df)
+        
         t += 1
         remaining.remove(next_action)
         state = State(t, qid, remaining)
+
+        # relevance_score = filtered_df[filtered_df["doc_id"] == next_action]['relevance'].values
+        # reward = compute_reward(t, 1, relevance_score, 0, 0, 0, 0, [])
+
+        # print(f"next_action:{next_action}, relevance_score:{relevance_score}, reward:{reward}")
+
         ranking.append(next_action)
+    
     return ranking
+    
 
 def get_true_ranking(qid, dataset):
     """
@@ -185,7 +200,7 @@ def all_ndcg_single(agent, k_list, qid, dataset):
     returns ndcg@k, averaged across all queries in dataset
     """
     agent_ranking = get_agent_ranking_list(agent, qid, dataset)
-    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "relevance")
+    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "rank")
     return all_ndcg_values(relevance_list, k_list)
 
 def all_error_single(agent, k_list, qid, dataset):
@@ -193,12 +208,12 @@ def all_error_single(agent, k_list, qid, dataset):
     Returns NDCG@k list plus tau for a single qid
     """
     agent_ranking = get_agent_ranking_list(agent, qid, dataset)
-    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "relevance")
+    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "rank")
     return all_ndcg_values_plus_tau(relevance_list, k_list)
 
 def get_tau_single(agent, qid, dataset):
     agent_ranking = get_agent_ranking_list(agent, qid, dataset)
-    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "relevance")
+    relevance_list = get_feature_for_docs(agent_ranking, qid, dataset, "rank")
     return get_tau(relevance_list)
     
 def eval_agent_ndcg(agent, k, dataset):
@@ -255,16 +270,16 @@ def get_just_tau(agent, dataset):
 def write_trec_results(agent, dataset, feature_names, output_file_path: str):    
     
     with open(output_file_path, 'a+') as file:
+        # file.write(f"qid QO doc_id feature_scores ModelName rank\n")
         for qid in set(dataset["qid"]):
+            
             agent_ranking = get_agent_ranking_list(agent, qid, dataset)
             for rank, doc_id in enumerate(agent_ranking, start=1):
                 feature_scores = []
                 for feature_name in feature_names:
-                    feature_score = dataset[(dataset["qid"] == qid) & (dataset["doc_id"] == doc_id)][feature_name].values[0]
+                    feature_score = dataset[(dataset["qid"] == qid) & (dataset["doc_id"] == str(doc_id)  )][feature_name].values[0]
                     feature_scores.append(feature_score)
-
-                # print(feature_scores)
                 feature_scores = [str(a) for a in feature_scores]
                 feature_scores = " ".join(feature_scores)
-                file.write(f"{qid} QO {doc_id} {rank} {feature_scores} ModelName\n")
+                file.write(f"{qid} QO {doc_id} {feature_scores} ModelName\n")
 

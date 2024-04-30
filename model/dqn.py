@@ -12,9 +12,8 @@ set_manual_seed()
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim, model_size):
 
-        print(f"input_dim:{input_dim}, output_dim:{output_dim}")
         super(DQN, self).__init__()
-        self.input_dim = input_dim + 2 #change
+        self.input_dim = input_dim + 1 # add one to include the timestep
         self.output_dim = output_dim
 
         layer_sizes = {
@@ -49,14 +48,20 @@ class DQNAgent:
         self.dataset = dataset 
         self.replay_buffer = buffer
 
+        self.features = list(config_dict.features)
         self.model = pre_trained_model or DQN(
-            config_dict.get('input_dim', 768), 
+            config_dict.get('input_dim', 768) + len(self.features), 
+            config_dict.get('output_dim', 1), 
+            config_dict.get('model_size', 'small')
+        )
+
+        self.target_model = pre_trained_model or DQN(
+            config_dict.get('input_dim', 768) + len(self.features), 
             config_dict.get('output_dim', 1), 
             config_dict.get('model_size', 'small')
         )
 
         self.learning_rate = config_dict.get('learning_rate', 1e-4)
-        print(f"self.learning_rate:{self.learning_rate}")
         self.gamma = config_dict.get('gamma', 0.99)
         self.tau = config_dict.get('tau', 0.005)
         self.swa = config_dict.get('swa', False)
@@ -75,59 +80,56 @@ class DQNAgent:
 
         dataset = dataset if not dataset.empty else self.dataset
 
-        inputs = get_multiple_model_inputs(state, state.remaining, dataset)
+        inputs, relevance_list = get_multiple_model_inputs(state, state.remaining, self.features, dataset)
         
         model_inputs = autograd.Variable(torch.from_numpy(inputs).float().unsqueeze(0))
+        
         expected_returns = self.model.forward(model_inputs)
-        value, index = expected_returns.max(1)
-        return state.remaining[index[0]]
+        expected_returns_np = expected_returns.detach().numpy()
 
-    def compute_loss(self, batch, dataset, verbose=True):
+        max_relevance_index = np.argmax(relevance_list)
+        max_expected_index = np.argmax(expected_returns_np)
+
+        valid_expected = (max_relevance_index == max_expected_index)
+        value, index = expected_returns.max(1)
+        return state.remaining[max_expected_index], valid_expected
+
+
+    def update_target(self):
+        self.target_model.load_state_dict(self.model.state_dict())
+
+
+    def compute_loss(self, batch, dataset, normalized):
 
         states, actions, rewards, next_states, dones = batch
-        
-        model_inputs = [ get_model_inputs(states[i], actions[i], dataset, False) for i in range(len(states))]
-        model_inputs = torch.FloatTensor( np.array(model_inputs) )
+        model_inputs = np.array([get_model_inputs(states[i], actions[i], self.features, dataset, normalized)\
+            for i in range(len(states))])
+        model_inputs = torch.FloatTensor(model_inputs)
 
-        rewards = torch.FloatTensor( np.array(rewards) )
+        rewards = torch.FloatTensor(rewards)
         dones = torch.FloatTensor(dones)
 
+        print(f"model_inputs size:{model_inputs.size()}")
         curr_Q = self.model.forward(model_inputs)
+        model_inputs = np.array([get_model_inputs(next_states[i], actions[i], self.features, dataset, normalized) \
+            for i in range(len(next_states))])
+        model_inputs = torch.FloatTensor(model_inputs)
 
-
-        stacked_arrays = []
-        for i in range(len(next_states[0].remaining)):
-
-            temp = get_model_inputs(next_states[0], next_states[0].remaining[i], dataset)
-            stacked_arrays.append(temp)
-
-        if stacked_arrays:
-            result_array = np.vstack(stacked_arrays)
-            model_inputs = torch.FloatTensor(result_array)
-            next_Q = self.model.forward(model_inputs)
-            
-
-            max_value, max_index = torch.max(next_Q, 1)
-            max_next_Q = max_value.max().item() 
-            # max_next_Q = torch.max(next_Q, 1)[0].max().item()
-            max_next_Q_index = max_value.max(0)[1].item()
-
-            
-
-            expected_Q = rewards.squeeze(1) + (1 - dones) * self.gamma * max_next_Q
-            
-        else:
-            expected_Q = rewards.squeeze(1)
+        # next_Q = self.target_model.forward(model_inputs)
+        next_Q = self.model.forward(model_inputs)
+        max_next_Q = torch.max(next_Q, 1)[0]
+        # expected_Q = rewards.squeeze(1) + (1 - dones) * self.gamma * max_next_Q
+        expected_Q = rewards.squeeze(1)
 
         loss = self.MSE_loss(curr_Q.squeeze(0), expected_Q.detach())
-        return loss, curr_Q, expected_Q
+        return loss,curr_Q,expected_Q
 
-    def update(self, batch_size, verbose=False):
+    def update(self, batch_size, normalized):
         batch = self.replay_buffer.sample(batch_size)
 
         state_batch, action_batch, reward_batch, next_state_batch, done_batch = batch
 
-        loss, curr_Q, expected_Q = self.compute_loss(batch, self.dataset, verbose)
+        loss, curr_Q, expected_Q = self.compute_loss(batch, self.dataset, normalized)
 
         train_loss = loss.float()
         self.optimizer.zero_grad()
@@ -135,4 +137,4 @@ class DQNAgent:
         self.optimizer.step()
         if self.swa:
             self.optimizer.swap_swa_sgd()
-        return train_loss, curr_Q
+        return train_loss, curr_Q, expected_Q,  reward_batch, done_batch

@@ -7,6 +7,7 @@ from loguru import logger
 from hydra import compose, initialize
 import torch
 from torch.utils.tensorboard import SummaryWriter
+import matplotlib.pyplot as plt
 
 from model.dqn import DQNAgent
 from model.mdp import BasicBuffer
@@ -23,7 +24,6 @@ def train_model(cfg, train_set=None, valid_set=None):
     valid_cfg = cfg.valid_config
     train_cfg = cfg.train_config
 
-    writer = SummaryWriter()
 
     writer = SummaryWriter(log_dir=f'{train_cfg.output_folder}/tensorboard')
 
@@ -32,32 +32,29 @@ def train_model(cfg, train_set=None, valid_set=None):
     train_buffer = BasicBuffer(train_cfg.run_params.buffer_qid * 15)
     train_buffer.push_batch(train_cfg.qid_train_list_path, train_set, train_cfg.reward_params,  train_cfg.run_params.buffer_qid)
 
-    valid_set = valid_set if valid_set is not None and not valid_set.empty else load_dataset(valid_cfg)
-    val_buffer = BasicBuffer(valid_cfg.run_params.buffer_qid*15)
-    val_buffer.push_batch(valid_cfg.qid_valid_list_path, valid_set, valid_cfg.reward_params, valid_cfg.run_params.buffer_qid)
-
     agent = DQNAgent(dataset=train_set, buffer=train_buffer, config_dict = train_cfg.model_config_dict)
     
-    best_val_performance = float('inf')
-    training_metrics = {'train_loss': [], 'train_reward': [], 'valid_loss': []}
+    # best_val_performance = float('inf')
+    training_metrics = {'train_loss': [], 'expectedQ': []}
 
+    train_loss_list, curr_Q_list, expected_Q_list, reward_batches = [], [], [], []
+
+    # episode_rewards = []
     for epoch in tqdm(range(train_cfg.run_params.epochs)):
 
-        loss, expected_Q = agent.update(1, verbose=True)
+
+        # if epoch%1 == 0:
+        #     agent.update_target()
+        loss, curr_Q, expected_Q, reward_batch, done_batch = agent.update(1, normalized=train_cfg.run_params.normalized)
+
         training_metrics['train_loss'].append(loss)
-        training_metrics['train_reward'].append(expected_Q)
+        training_metrics['expectedQ'].append(expected_Q)
 
-        writer.add_scalar('Loss/train', loss, epoch)
-        writer.add_scalar('Reward/train', expected_Q, epoch)
+        # writer.add_scalars('Q-Values', {'Current': curr_Q.item(), 'Expected': expected_Q.item()}, epoch)
 
-        val_loss, curr_Q, expected_Q = agent.compute_loss(val_buffer.sample(1), valid_set, verbose=True)
-        training_metrics['valid_loss'].append(val_loss)
+        # writer.add_scalar('Loss/train', loss, epoch)
+        # writer.add_scalar('Reward/train', expected_Q, epoch)
 
-        writer.add_scalar('Loss/validation', val_loss, epoch)
-
-        if val_loss < best_val_performance:
-            best_val_performance = val_loss
-            torch.save(agent.model.state_dict(), train_cfg.model_path)
 
         if epoch % 250 == 0:
             model_temp_path = "/".join(train_cfg.model_path.split("/")[:-1])

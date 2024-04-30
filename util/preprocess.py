@@ -65,12 +65,16 @@ def load_dataset(cfg, stage= None) -> pd.DataFrame:
         input_file_path, df_path, queries_path = cfg.neutral_test_set_path, cfg.neutral_test_df_path, cfg.test_queries_path
     elif stage == "EVAL2":
         input_file_path, df_path, queries_path = cfg.social_test_set_path, cfg.social_test_df_path, cfg.test_queries_path
+    elif stage == "TRAIN_TEST":
+        input_file_path, df_path, queries_path = cfg.train_test_set_path, cfg.train_test_df_path, cfg.test_queries_path
     else:
         input_file_path, df_path, queries_path = cfg.dev_test_set_path, cfg.dev_test_df_path, cfg.test_queries_path
 
 
 
     if not os.path.exists(df_path):
+
+        logger.info(f"Loaded from input_file_path:{input_file_path}")
 
         df = pd.read_csv(input_file_path, names = list(cfg.run_params.columns))
 
@@ -81,9 +85,7 @@ def load_dataset(cfg, stage= None) -> pd.DataFrame:
         corpus = load_corpus(cfg.corpus_file_path)
 
         common_qid = set(queries.keys()).intersection(set(df["qid"].values))
-        # print(f"common_qid:{common_qid}")
 
-        # base_language_model_path = f"/home/sajadeb/LLaMA_Debiasing/CrossEncoder/output/cross-encoder_bert-base-uncased/"
         df = encode_date(queries, corpus, df, cfg.cross_encoder_path)
 
         df.columns = ['qid', 'doc_id', 'relevance'] + [str(i) for i in range(1, 769)]
@@ -92,6 +94,7 @@ def load_dataset(cfg, stage= None) -> pd.DataFrame:
 
     else:
 
+        logger.info(f"Loaded from df_path:{df_path}")
         df = pd.read_csv(df_path)  
         df["qid"] = df["qid"].astype(str)
         df["doc_id"] = df["doc_id"].astype(str)
@@ -101,16 +104,18 @@ def load_dataset(cfg, stage= None) -> pd.DataFrame:
             df['bias'] = df['bias'].apply(lambda x:x[0])
 
 
-        columns = list(cfg.run_params.columns) + [str(i) for i in range(1, cfg.run_params.vector_size+1)]
-        df = df[columns]
+        # columns = list(cfg.run_params.columns) + [str(i) for i in range(1, cfg.run_params.vector_size+1)]
+        # df = df[columns]
         df = df.sort_values(["qid", "relevance"], ascending=False)
 
         logger.info(f"{stage}\n{df.head(5)}")
 
+    logger.info(df.info())
+    logger.info(f"Columns in the loaded dataset are :{df.columns}")
     return df
 
 
-def get_features(qid, doc_id, dataset) -> List[float]:
+def get_features(qid, doc_id, features, dataset) -> List[float]:
 
     qid, doc_id = str(qid), str(doc_id)
 
@@ -126,12 +131,10 @@ def get_features(qid, doc_id, dataset) -> List[float]:
 
     relevant_columns = [f"{i}" for i in range(1, vector_size+1)]
 
-    # relevant_columns = relevant_columns + ["relevance", "bias", "nfair"]
-    relevant_columns = relevant_columns + ["relevance"]
-
+    relevant_columns = relevant_columns + features
     return df[relevant_columns].values.tolist()[0]
 
-def get_query_features(qid, doc_list, dataset) -> np.ndarray:
+def get_query_features(qid, doc_list, features, dataset) -> np.ndarray:
     """
     Get query features for the given query ID, list of docs, and dataset.
     """
@@ -152,31 +155,35 @@ def get_query_features(qid, doc_list, dataset) -> np.ndarray:
         vector_size = 768
 
     # valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance", "bias", "nfair"]
-    valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance"]
+    # valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance"]
+    valid_columns = [str(x) for x in range(1,vector_size+1)] + features
+    df = df.set_index('doc_id').loc[doc_list].reset_index()
+    relevance_list = df["relevance"].values
+    # valid_columns = ["relevance"]
     df = df[valid_columns]
-    # print(f"query featues: {df.columns}")
-    return df.values
+    return df.values, relevance_list
 
 
-def get_model_inputs(state, action, dataset, verbose=True) -> np.ndarray:
+def get_model_inputs(state, action, features, dataset, normalize=False) -> np.ndarray:
 
-    temp = [state.t] + get_features(state.qid, action, dataset)
+    temp = [state.t] + get_features(state.qid, action, features, dataset)
     temp = [float(x) for x in temp]
 
     temp_array = np.array(temp)
     
-    min_val = temp_array.min()
-    max_val = temp_array.max()
-    if max_val - min_val > 0:  # Avoid division by zero
-        normalized_temp = (temp_array - min_val) / (max_val - min_val)
-    else:
-        normalized_temp = temp_array
+    if normalize:
+        min_val = temp_array.min()
+        max_val = temp_array.max()
+        if max_val - min_val > 0:
+            temp_array = (temp_array - min_val) / (max_val - min_val)
 
-    return np.array(normalized_temp)
+    return np.array(temp_array)
 
-def get_multiple_model_inputs(state, doc_list, dataset) -> np.ndarray:
+def get_multiple_model_inputs(state, doc_list, features, dataset) -> np.ndarray:
 
-    return np.insert(get_query_features(state.qid, doc_list, dataset), 0, state.t, axis=1)
+    features, relevance_list = get_query_features(state.qid, doc_list, features, dataset)
+
+    return np.insert(features, 0, state.t, axis=1), relevance_list
 
 
 

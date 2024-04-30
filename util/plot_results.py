@@ -11,7 +11,7 @@ def save_and_plot_results(numbers, window, results_folder, stage):
 
     plot_loss(numbers, f"{results_folder}/plots/{stage}.png", label=f"{stage}")
     plot_loss(pd.Series(numbers).rolling(window=window).mean().tolist(), f"{results_folder}/plots/{stage}_MA.png", label=f"{stage} Moving Average")
-    plot_MA_log10(numbers, window, f"{results_folder}/plots/{stage}_MALog", label=f" MA(log({stage}))")
+    # plot_MA_log10(numbers, window, f"{results_folder}/plots/{stage}_MALog", label=f" MA(log({stage}))")
     
     print("results_folder", results_folder)
 
@@ -50,19 +50,3 @@ def plot_MRR(MRR_list, plot_name):
     plt.xlabel('Epoch/250')
     plt.ylabel('MRR@10 value')
     plt.savefig(plot_name)
-    
-    # with open(train_cfg.train_losses_path, 'w+') as f:
-    #     f.write(str(y))
-
-    # with open(valid_config.valid_losses_path, 'w+') as f:
-    #     f.write(str(z))
-#     plot_MA_log10(rewards, train_cfg.constants.window, train_cfg.train_QValues_log10_plot_path, label="Q valuesin log10 MA")
-#     plot_loss(rewards,  train_cfg.train_QValues_plot_path, label = "Q values")
-
-#     plot_MA_log10(y, train_cfg.constants.window, train_cfg.train_loss_log10_plot_path, label="train loss in log10 MA")
-#     plot_loss(pd.Series(y).rolling(window=20).mean().tolist(),  train_cfg.train_loss_avg_plot_path, label = "train loss")
-#     plot_loss(y,  train_cfg.train_loss_plot_path, label = "train loss")
-
-#     plot_MA_log10(z, valid_config.constants.window, valid_config.valid_loss_log10_plot_path, label="validation loss in log10 MA")
-#     plot_loss(pd.Series(z).rolling(window=20).mean().tolist(),  valid_config.valid_loss_avg_plot_path, label = "validation loss")
-# #     plot_loss(z,  valid_config.valid_loss_plot_path, label = "validation loss")

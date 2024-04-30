@@ -1,0 +1,154 @@
+version: test_normalized
+run_mode: DEBUG
+run_name: ${version}
+
+directories:
+  base_path: "/home/shiva_soleimany/RL/deep-q-rerank"
+  dataset_folder: "${directories.base_path}/MAIN_DATA/input/bert_base"
+  output_folder: "${directories.base_path}/MAIN_DATA/output/April29/${run_name}"
+  plot_folder: "${directories.output_folder}/plots"
+  model_folder: "${directories.output_folder}/models"
+  loss_folder: "${directories.output_folder}/losses"
+
+file_paths:
+  corpus_file_path: "/home/sajadeb/msmarco/collection.tsv"
+  qrel_file: "/home/shiva_soleimany/RL/deep-q-rerank/data/input/qrels.dev.tsv"
+  metadata_file_path: "${directories.output_folder}/metadat.md"
+
+columns:
+  - qid
+  - doc_id
+  - relevance
+
+model_config_dict:
+  input_dim: ${train_config.run_params.vector_size}
+  output_dim: 1
+  model_size: "big"
+  learning_rate: 0.001
+  gamma: 0.99
+  epsilon: 0.1
+  epsilon_decay: 0.99
+  features:
+    - bias
+    - relevance
+    - nfair
+
+constants:
+  seed: 0
+  window: 1
+  normalized: True
+
+train_config:
+  run_mode: "${run_mode}"
+  stage: "TRAIN"  
+  window: ${constants.window}
+  model_config_dict: "${model_config_dict}"
+  run_params:
+    epochs: 100
+    top_docs_count: 20
+    buffer_qid: 10
+    vector_size: 768
+    max_row: 100
+    columns: "${columns}"
+    normalized: ${constants.normalized}
+  reward_params: 
+    reward_mode: relevance
+    relevance_coeff: 1
+    bias_coeff: 0
+    nfair_coeff: 0
+
+
+  output_folder: ${directories.output_folder}
+
+  corpus_file_path: "${file_paths.corpus_file_path}"
+  qrel_file: "${file_paths.qrel_file}"
+  train_queries_path: "/home/sajadeb/msmarco/queries.train.tsv"
+  metadata_file_path: "${file_paths.metadata_file_path}"
+  model_path: "${directories.model_folder}/model.pth" 
+  bert_model_path: "/home/sajadeb/LLaMA_Debiasing/BiEncoder/output/bi-encoder_margin-mse_bert-base-uncased"
+  cross_encoder_path: "/home/sajadeb/LLaMA_Debiasing/CrossEncoder/output/cross-encoder_bert-base-uncased"
+
+  qid_train_list_path: "${directories.output_folder}/train_qid_list.txt"
+  train_set_path: "/home/sajadeb/msmarco/encoded_dataset/train_ce_bert-base-uncased_20.csv"
+  train_df_path: "/home/sajadeb/msmarco/encoded_dataset/train_ce_bert-base-uncased_20.csv"
+  # train_df_path: "/home/shiva_soleimany/RL/deep-q-rerank/MAIN_DATA/input/Augmented/df_augmented_600_encoded.csv"
+
+  train_losses_path: "${directories.loss_folder}/TrainLosses.txt"
+  train_loss_plot_path: "${directories.plot_folder}/TrainingLoss.png"
+  train_loss_log10_plot_path: "${directories.plot_folder}/TrainingLossLog10.png"
+  train_QValues_plot_path: "${directories.plot_folder}/QValues.png"
+  train_QValues_log10_plot_path: "${directories.plot_folder}/QValues_log10.png"
+# --------------
+valid_config:
+  run_mode: "${run_mode}"
+  stage: "VALID"
+  model_config_dict: "${model_config_dict}"
+  run_params:
+    buffer_qid: 300
+    vector_size: "${train_config.run_params.vector_size}"
+    top_docs_count: "${train_config.run_params.top_docs_count}"
+    epochs: "${train_config.run_params.epochs}"
+    columns: "${columns}"
+    max_row: 5000
+    normalized: ${constants.normalized}
+  reward_params: ${train_config.reward_params}
+
+  corpus_file_path: "${file_paths.corpus_file_path}"
+  qrel_file: "${file_paths.qrel_file}"
+
+  metadata_file_path: "${file_paths.metadata_file_path}"
+  model_path: "${train_config}/model_path" 
+  bert_model_path: "${train_config.bert_model_path}"
+
+  cross_encoder_path: ${train_config.cross_encoder_path}
+  valid_queries_path: "/home/sajadeb/msmarco/neutral_queries.tsv"
+  qid_valid_list_path: "${directories.output_folder}/valid_qid_list.txt"
+  valid_set_path: "${directories.dataset_folder}/ValidationLosses.txt" #FIX
+  valid_df_path: "${train_config.train_df_path}"
+  valid_losses_path:  "${directories.loss_folder}/ValidationLosses.txt"
+  valid_loss_plot_path: "${directories.plot_folder}/ValidationLoss.png"
+  valid_loss_log10_plot_path: "${directories.plot_folder}/ValidationLossLog10.png"
+
+# --------------
+eval_config:
+  run_mode: "${run_mode}"
+  stage: "EVAL"
+  model_config_dict: "${model_config_dict}"
+  run_params:
+    vector_size: "${train_config.run_params.vector_size}"
+    top_docs_count: "${train_config.run_params.top_docs_count}"
+    epochs: "${train_config.run_params.epochs}"
+    columns: "${columns}"
+    max_row: 50000
+    normalized: ${constants.normalized}
+
+  output_folder: ${directories.output_folder}
+
+  corpus_file_path: "${file_paths.corpus_file_path}"
+  qrel_file: "${file_paths.qrel_file}"
+
+  plot_folder: ${directories.plot_folder}
+  test_queries_path: "/home/sajadeb/msmarco/neutral_queries.tsv"
+  metadata_file_path: "${file_paths.metadata_file_path}"
+
+  eval_train_trec_output_file_path: "${directories.output_folder}/eval_train_trec_output.txt"
+  eval_dev_trec_output_file_path: "${directories.output_folder}/eval_dev_trec_output.txt"
+  eval_neutral_trec_output_file_path: "${directories.output_folder}/eval_neutral_trec_output.txt"
+  eval_social_trec_output_file_path: "${directories.output_folder}/eval_social_trec_output.txt"
+
+  eval_output_file_path: "${directories.output_folder}/eval_output.txt"
+  pretrained_model_path: "${train_config.model_path}"
+  bert_model_path: "${train_config.bert_model_path}"
+  cross_encoder_path: ${train_config.cross_encoder_path}
+
+  train_test_set_path: ${train_config.train_set_path}
+  train_test_df_path: ${train_config.train_df_path}
+
+  neutral_test_set_path: "/home/shiva_soleimany/RL/deep-q-rerank/MAIN_DATA/input/bert_base/neutral_ce_bert-base-uncased.csv"
+  neutral_test_df_path: "/home/shiva_soleimany/RL/deep-q-rerank/MAIN_DATA/input/bert_base/neutral_ce_bert-base-uncased.csv"
+
+  social_test_set_path: "/home/shiva_soleimany/RL/deep-q-rerank/MAIN_DATA/input/bert_base/social_neutral_ce_bert-base-uncased.csv"
+  social_test_df_path: "/home/shiva_soleimany/RL/deep-q-rerank/MAIN_DATA/input/bert_base/social_neutral_ce_bert-base-uncased.csv"
+
+  dev_test_set_path: /home/sajadeb/msmarco/encoded_dataset/dev_ce_bert-base-uncased.csv
+  dev_test_df_path: /home/sajadeb/msmarco/encoded_dataset/dev_ce_bert-base-uncased.csv

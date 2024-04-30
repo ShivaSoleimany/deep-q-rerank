@@ -8,22 +8,22 @@ from util.helper_functions import set_manual_seed
 
 set_manual_seed()
 
-def calculate_MRR(rank_list):
+def calculate_MRR_reward(rank_list):
 
     relevant_index = next((i for i, rank in enumerate(rank_list) if rank == 1), None)
     return 1 / (relevant_index + 1) if relevant_index is not None else 0.0
 
 def compute_reward(t, features_coeffs, sorted_list=None, reward_mode="_"):
 
-    if t == 0:
-        return 0
-
-    if reward_mode == "MRR":
+    if reward_mode =="relevance":
+        return (features_coeffs[0][0] * features_coeffs[0][1])
+    elif reward_mode == "relevance_t":
+        return (features_coeffs[0][0] * features_coeffs[0][1])/ t
+    elif reward_mode == "MRR":
         relevance_scores = [x[1] for x in sorted_list or []]
-        return calculate_MRR(relevance_scores)
-
-    return sum(feature * coeff for feature, coeff in features_coeffs) / (t + 1)
-
+        return calculate_MRR_reward(relevance_scores)
+    else:
+        return sum(feature * coeff for feature, coeff in features_coeffs)
     
 class State:
 
@@ -57,12 +57,11 @@ class BasicBuffer:
         self.buffer.append(experience)
 
     def push_batch(self, qid_list_path, df, reward_params, n):
-        logger.info("push_batch")
-         
+
+        reward_mode = reward_params["reward_mode"]
         relevance_coef = reward_params["relevance_coeff"]
         bias_coef = reward_params["bias_coeff"]
         nfair_coef = reward_params["nfair_coeff"]
-        reward_mode = reward_params["reward_mode"]
 
         for i in range(n):
 
@@ -74,7 +73,7 @@ class BasicBuffer:
             sorted_list = []
 
             random.shuffle(row_order)
-            for t,r in enumerate(row_order):
+            for t,r in enumerate(row_order): 
                 cur_row = filtered_df.iloc[r]
                 old_state = State(t, cur_row["qid"], X[:], sorted_list[:])
                 action = cur_row["doc_id"]

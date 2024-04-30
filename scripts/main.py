@@ -15,7 +15,7 @@ set_manual_seed()
 def main(config_files):
     
     train_set, val_set = pd.DataFrame(), pd.DataFrame()
-    neutral_test_set, social_test_set, dev_test_set  = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    neutral_test_set, social_test_set, dev_test_set, train_test_set  = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     initialize(config_path="config")
     for config_file in config_files:
@@ -46,7 +46,22 @@ def main(config_files):
         train_model(cfg, train_set, train_set)
         train_end_time = time.time()
         train_run_time = train_end_time - train_start_time
+        logger.info("original df")
+        print(train_set.head(100))
         # train_run_time = 0
+        #--------------
+        # logger.info(f"Loading  train_test_set for {config_file}")
+        # if train_test_set.empty:
+        #     start_time = time.time()
+        #     train_test_set = load_dataset(cfg.eval_config, "TRAIN_TEST")
+        # logger.info(f"Loaded train_test_set for {config_file} in {time.time() - start_time} seconds")
+        
+        # eval_start_time = time.time()
+        # eval_model(cfg.eval_config, train_test_set)
+        # eval_end_time = time.time()
+        # eval_run_time = eval_end_time - eval_start_time
+
+        # save_run_info(cfg.train_config, train_run_time, eval_run_time)
         #--------------
         logger.info(f"Loading neutral neutral_test_set for {config_file}")
         if neutral_test_set.empty:
@@ -60,32 +75,32 @@ def main(config_files):
         eval_run_time = eval_end_time - eval_start_time
 
         save_run_info(cfg.train_config, train_run_time, eval_run_time)
-        #---------------
-        logger.info(f"Loading social neutral test_set for {config_file}")
-        if social_test_set.empty:
-            start_time = time.time()
-            social_test_set = load_dataset(cfg.eval_config, "EVAL2")
-        logger.info(f"Loaded social_test_set for {config_file} in {time.time() - start_time} seconds")
+        # # #---------------
+        # logger.info(f"Loading social neutral test_set for {config_file}")
+        # if social_test_set.empty:
+        #     start_time = time.time()
+        #     social_test_set = load_dataset(cfg.eval_config, "EVAL2")
+        # logger.info(f"Loaded social_test_set for {config_file} in {time.time() - start_time} seconds")
         
-        eval_start_time = time.time()
-        eval_model(cfg.eval_config, social_test_set)
-        eval_end_time = time.time()
-        eval_run_time = eval_end_time - eval_start_time
+        # eval_start_time = time.time()
+        # eval_model(cfg.eval_config, social_test_set)
+        # eval_end_time = time.time()
+        # eval_run_time = eval_end_time - eval_start_time
 
-        save_run_info(cfg.train_config, train_run_time, eval_run_time)
-        #---------------
-        logger.info(f"Loading social dev_test_set  for {config_file}")
-        if dev_test_set.empty:
-            start_time = time.time()
-            dev_test_set = load_dataset(cfg.eval_config, "EVAL3")
-        logger.info(f"Loaded dev_test_set for {config_file} in {time.time() - start_time} seconds")
+        # save_run_info(cfg.train_config, train_run_time, eval_run_time)
+        # # ---------------
+        # logger.info(f"Loading social dev_test_set  for {config_file}")
+        # if dev_test_set.empty:
+        #     start_time = time.time()
+        #     dev_test_set = load_dataset(cfg.eval_config, "EVAL3")
+        # logger.info(f"Loaded dev_test_set for {config_file} in {time.time() - start_time} seconds")
         
-        eval_start_time = time.time()
-        eval_model(cfg.eval_config, dev_test_set)
-        eval_end_time = time.time()
-        eval_run_time = eval_end_time - eval_start_time
+        # eval_start_time = time.time()
+        # eval_model(cfg.eval_config, dev_test_set)
+        # eval_end_time = time.time()
+        # eval_run_time = eval_end_time - eval_start_time
 
-        save_run_info(cfg.train_config, train_run_time, eval_run_time)
+        # save_run_info(cfg.train_config, train_run_time, eval_run_time)
 
 if __name__ == "__main__":
 

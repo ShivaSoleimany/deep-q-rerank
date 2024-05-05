@@ -61,14 +61,17 @@ def load_dataset(cfg, stage= None) -> pd.DataFrame:
         input_file_path, df_path, queries_path = cfg.train_set_path, cfg.train_df_path, cfg.train_queries_path
     elif stage == 'VALID':
         input_file_path, df_path, queries_path = cfg.valid_set_path, cfg.valid_df_path, cfg.valid_queries_path
-    elif stage == "EVAL1":
+    elif stage == "NEUTRAL":
         input_file_path, df_path, queries_path = cfg.neutral_test_set_path, cfg.neutral_test_df_path, cfg.test_queries_path
-    elif stage == "EVAL2":
+    elif stage == "SOCIAL":
         input_file_path, df_path, queries_path = cfg.social_test_set_path, cfg.social_test_df_path, cfg.test_queries_path
     elif stage == "TRAIN_TEST":
         input_file_path, df_path, queries_path = cfg.train_test_set_path, cfg.train_test_df_path, cfg.test_queries_path
-    else:
+    elif stage == "DEV":
         input_file_path, df_path, queries_path = cfg.dev_test_set_path, cfg.dev_test_df_path, cfg.test_queries_path
+    elif stage == "DEV50":
+        input_file_path, df_path, queries_path = cfg.dev50_test_set_path, cfg.dev50_test_df_path, cfg.test_queries_path
+
 
 
 
@@ -131,7 +134,9 @@ def get_features(qid, doc_id, features, dataset) -> List[float]:
 
     relevant_columns = [f"{i}" for i in range(1, vector_size+1)]
 
-    relevant_columns = relevant_columns + features
+    if features:
+        relevant_columns = relevant_columns + features
+
     return df[relevant_columns].values.tolist()[0]
 
 def get_query_features(qid, doc_list, features, dataset) -> np.ndarray:
@@ -156,7 +161,10 @@ def get_query_features(qid, doc_list, features, dataset) -> np.ndarray:
 
     # valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance", "bias", "nfair"]
     # valid_columns = [str(x) for x in range(1,vector_size+1)] + ["relevance"]
-    valid_columns = [str(x) for x in range(1,vector_size+1)] + features
+    
+    valid_columns = [str(x) for x in range(1,vector_size+1)]
+    if features:
+        valid_columns = valid_columns + features
     df = df.set_index('doc_id').loc[doc_list].reset_index()
     relevance_list = df["relevance"].values
     # valid_columns = ["relevance"]
@@ -165,7 +173,6 @@ def get_query_features(qid, doc_list, features, dataset) -> np.ndarray:
 
 
 def get_model_inputs(state, action, features, dataset, normalize=False) -> np.ndarray:
-
     temp = [state.t] + get_features(state.qid, action, features, dataset)
     temp = [float(x) for x in temp]
 

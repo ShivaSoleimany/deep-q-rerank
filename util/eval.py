@@ -11,6 +11,7 @@ from util.preprocess import *
 from util.helper_functions import set_manual_seed
 
 set_manual_seed()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def calculate_MRR(qrel_file, run_file, k):
@@ -117,10 +118,10 @@ def get_agent_ranking_list(agent, qid, features, df, normalized):
         a = filtered_df[filtered_df["doc_id"] == next_action]['relevance'].values
 
         model_inputs = np.array(get_model_inputs(state, next_action, features, filtered_df, normalized))
-        model_inputs = torch.FloatTensor(model_inputs)
+        model_inputs = torch.FloatTensor(model_inputs).to(device) 
         b = agent.model.forward(model_inputs)
-        loss_function = nn.MSELoss(reduction='mean')
-        a = torch.tensor(a) * 10
+        loss_function = nn.MSELoss(reduction='mean').to(device) 
+        a = torch.tensor(a, device = device) * 10
 
         mse_loss = F.mse_loss(a, b).item()
 

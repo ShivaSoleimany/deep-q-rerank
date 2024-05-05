@@ -38,7 +38,11 @@ def eval_model(eval_cfg, test_set=None):
         test_set = load_dataset(eval_cfg)
 
     features = eval_cfg.model_config_dict.features
-    input_dim = eval_cfg.model_config_dict.input_dim + len(features)
+    if features:
+        len_features = len(features)
+    else:
+        len_features = 0
+    input_dim = eval_cfg.model_config_dict.input_dim + len_features
 
     output_dim = eval_cfg.model_config_dict.output_dim
     model_size = eval_cfg.model_config_dict.model_size
@@ -79,13 +83,12 @@ def evaluate_and_log_performance(agent, test_set, qrel_file, model_file, trec_mo
     trec_output_file_path = "".join(trec_output_file_path.split(".")[0])
     current_trec_output_file_path = f"{trec_output_file_path}_{trec_mode}_{model_file}.txt"
 
-    mse_loss = write_trec_results(agent, test_set, ["relevance"], features, normalized, current_trec_output_file_path )
+    mse_loss = write_trec_results(agent, test_set, ["relevance", "bias"], features, normalized, current_trec_output_file_path )
     print(f"mse_loss:{mse_loss}")
 
     MRR10_output = calculate_MRR(qrel_file, current_trec_output_file_path, 10)
-
-    # bias_values = calculate_bias(current_trec_output_file_path)
-    # formatted_bias_values = format_bias_output(bias_values) 
+    bias_values = calculate_bias(current_trec_output_file_path)
+    formatted_bias_values = format_bias_output(bias_values) 
 
     # os.remove(current_trec_output_file_path)
 
@@ -93,7 +96,7 @@ def evaluate_and_log_performance(agent, test_set, qrel_file, model_file, trec_mo
     with open(eval_output_file_path, "a+") as f:
         f.write(f"input MRR@10 Value: {MRR10_input}\n")
         f.write(f"{model_file} MRR@10 Value: {MRR10_output}\n")
-        # f.write(f"output bias Value:\n{formatted_bias_values}\n")
+        f.write(f"output bias Value:\n{formatted_bias_values}\n")
         f.write(f"=========================================================\n")
 
     return MRR10_output, mse_loss

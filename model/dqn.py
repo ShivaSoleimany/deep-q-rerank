@@ -8,6 +8,7 @@ from util.preprocess import *
 from util.helper_functions import set_manual_seed
 
 set_manual_seed()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim, model_size):
@@ -29,7 +30,7 @@ class DQN(nn.Module):
         layers.append(nn.Linear(layer_sizes[-1], self.output_dim))
 
         self.fc = nn.Sequential(*layers)
-
+        self.to(device)
         self._init_weights()
 
     def _init_weights(self):
@@ -39,6 +40,7 @@ class DQN(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, state):
+        state = state.to(device)
         return self.fc(state)
     
 class DQNAgent:
@@ -48,25 +50,35 @@ class DQNAgent:
         self.dataset = dataset 
         self.replay_buffer = buffer
 
-        self.features = list(config_dict.features)
-        self.model = pre_trained_model or DQN(
-            config_dict.get('input_dim', 768) + len(self.features), 
-            config_dict.get('output_dim', 1), 
-            config_dict.get('model_size', 'small')
-        )
+        if config_dict.features:
+            print("----------")
+            self.features = list(config_dict.features)
+            len_features = len(self.features)
+        else:
+            print("+++++++++")
+            self.features = None
+            len_features = 0
 
-        self.target_model = pre_trained_model or DQN(
-            config_dict.get('input_dim', 768) + len(self.features), 
+        print(self.features)
+
+        self.model = (pre_trained_model or DQN(
+            config_dict.get('input_dim', 768) + len_features, 
             config_dict.get('output_dim', 1), 
             config_dict.get('model_size', 'small')
-        )
+        )).to(device)
+
+        self.target_model = (pre_trained_model or DQN(
+            config_dict.get('input_dim', 768) + len_features, 
+            config_dict.get('output_dim', 1), 
+            config_dict.get('model_size', 'small')
+        )).to(device)
 
         self.learning_rate = config_dict.get('learning_rate', 1e-4)
         self.gamma = config_dict.get('gamma', 0.99)
         self.tau = config_dict.get('tau', 0.005)
         self.swa = config_dict.get('swa', False)
 
-        self.MSE_loss = nn.MSELoss()
+        self.MSE_loss = nn.MSELoss().to(device)
 
         base_opt = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
@@ -82,10 +94,10 @@ class DQNAgent:
 
         inputs, relevance_list = get_multiple_model_inputs(state, state.remaining, self.features, dataset)
         
-        model_inputs = autograd.Variable(torch.from_numpy(inputs).float().unsqueeze(0))
+        model_inputs = autograd.Variable(torch.from_numpy(inputs).float().unsqueeze(0)).to(device)
         
         expected_returns = self.model.forward(model_inputs)
-        expected_returns_np = expected_returns.detach().numpy()
+        expected_returns_np = expected_returns.detach().cpu().numpy()
 
         max_relevance_index = np.argmax(relevance_list)
         max_expected_index = np.argmax(expected_returns_np)
@@ -102,22 +114,21 @@ class DQNAgent:
     def compute_loss(self, batch, dataset, normalized):
 
         states, actions, rewards, next_states, dones = batch
-        model_inputs = np.array([get_model_inputs(states[i], actions[i], self.features, dataset, normalized)\
-            for i in range(len(states))])
-        model_inputs = torch.FloatTensor(model_inputs)
-
-        rewards = torch.FloatTensor(rewards)
-        dones = torch.FloatTensor(dones)
-
-        print(f"model_inputs size:{model_inputs.size()}")
-        curr_Q = self.model.forward(model_inputs)
+        model_inputs = torch.tensor([get_model_inputs(states[i], actions[i], self.features, dataset, normalized) \
+                                for i in range(len(states))], dtype=torch.float32, device=device)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
+        dones = torch.tensor(dones, dtype=torch.float32, device=device)
+        curr_Q = self.model(model_inputs)
         model_inputs = np.array([get_model_inputs(next_states[i], actions[i], self.features, dataset, normalized) \
             for i in range(len(next_states))])
         model_inputs = torch.FloatTensor(model_inputs)
 
+        next_model_inputs = torch.tensor([get_model_inputs(next_states[i], actions[i], self.features, dataset, normalized) \
+                                    for i in range(len(next_states))], dtype=torch.float32, device=device)
+
         # next_Q = self.target_model.forward(model_inputs)
-        next_Q = self.model.forward(model_inputs)
-        max_next_Q = torch.max(next_Q, 1)[0]
+        next_Q = self.model(next_model_inputs)
+        max_next_Q = torch.max(next_Q, dim=1)[0]
         # expected_Q = rewards.squeeze(1) + (1 - dones) * self.gamma * max_next_Q
         expected_Q = rewards.squeeze(1)
 
